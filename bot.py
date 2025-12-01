@@ -109,7 +109,6 @@ async def get_user_visual_id(user_id: int) -> str | None:
 
 
 
-
 #СТАРТОВАЯ КОМАНДА
 #КНОПКА ДЛЯ ДОБАВЛЕНИЯ БОТА В ГРУППУ
 button = types.InlineKeyboardButton(
