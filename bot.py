@@ -410,7 +410,6 @@ async def profile_command(message: types.Message):
 
 
 
-
 #ОБРАБОТЧИК КОМАНД ДЛЯ ПОЛУЧЕНИЯ КАРТОЧКИ
 @dp.message_handler(lambda msg: isinstance(msg.text, str) and msg.text.strip().lower() in ['панчан', 'качан', 'карту', 'получить карту', 'пачан'])
 async def send_panchan(message: types.Message):
