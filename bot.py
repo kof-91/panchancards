@@ -11,15 +11,16 @@ import logging
 import os
 import json
 import datetime
-import re
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Regexp
 
 #КОНФИГ
-TOKEN = "ТОКЕН СЮДА ЗАПИШИТЕ"
-DB_PATH = "Z:/PANCHAN/database.db" #Я ТУТ ПУТЬ Я ДЛЯ СЕБЯ СДЕЛАЛ ЕСЛИ ЗАПУСКАТЬ БУДЕТЕ ПОМЕНЯЙТЕ НА СВОЙ
+TOKEN = "8484717385:AAENK80yEByo5tDCQDgK-uksC7q16268RaE"
+DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
+
+logging.basicConfig(level=logging.INFO)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 #ЛЮБЫЕ ЛОГИ ЧЕРЕЗ logging.info("ТЕКСТ ЛОГА")
@@ -39,6 +40,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             visual_id TEXT UNIQUE, 
+            visual_username TEXT,
             username TEXT,
             first_name TEXT,
             last_name TEXT,
@@ -98,11 +100,12 @@ async def add_user(user_id: int, username: str, first_name: str):
             return row[0]
 
         visual_id = generate_visual_id()
+        visual_username = f"{first_name}"
 
         #ДОБАВЛЕНИЕ В БД
         await db.execute(
-            "INSERT INTO users (id, username, first_name, visual_id) VALUES (?, ?, ?, ?)",
-            (user_id, username, first_name, visual_id)
+            "INSERT INTO users (id, username, first_name, visual_id, visual_username) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, first_name, visual_id, visual_username)
         )
         await db.commit()
 
@@ -187,6 +190,17 @@ async def get_user_visual_id(user_id: int) -> str | None:
             if row:
                 return row[0]
             return None
+        
+#ПОЛУЧЕНИЯ ВИЗУАЛЬНОГО USERNAME ЮЗЕРА
+async def get_user_visual_username(user_id: int) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT visual_username FROM users WHERE id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return row[0]
+            return None
+
+#СДЕЛАТЬ 
 
 #ВЫБОР РЕДКОСТИ ПО ВЕСАМ
 def choose_rarity():
@@ -246,11 +260,6 @@ async def get_unowned_files_by_rarity(user_id: int, rarity: str) -> list:
 
 
 
-#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
-#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
-#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
-#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
-
 #ПОЛУЧЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО ПАНЧАНА
 async def get_last_panchan_time(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -264,12 +273,7 @@ async def get_last_panchan_time(user_id):
             return datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
         except:
             return None
-
-#ТУТ ТОЖЕ САМОЕ!!!!!
-#ТУТ ТОЖЕ САМОЕ!!!!!
-#ТУТ ТОЖЕ САМОЕ!!!!!
-#ТУТ ТОЖЕ САМОЕ!!!!!
-#ТУТ ТОЖЕ САМОЕ!!!!!
+        
 
 #ОБНОВЛЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО ПАНЧАНА
 async def update_last_panchan_time(user_id):
@@ -400,6 +404,22 @@ async def help_command(message: types.Message):
     )
     return
 
+
+
+
+#ВОЗВРАТЫ
+keyboard_back_inventory = types.InlineKeyboardMarkup()
+button_back_inventory = types.InlineKeyboardButton("‹ Назад", callback_data="back_inventory")
+keyboard_back_inventory.add(button_back_inventory)  
+
+#КЛАВИАТУРА ПРОФИЛЯ
+keyboard_profile = types.InlineKeyboardMarkup()
+button_inventory = types.InlineKeyboardButton("🎒Инвентарь", callback_data="inventory")
+button_cards = types.InlineKeyboardButton("🃏Мои карточки", callback_data="my_cards")
+keyboard_profile.add(button_inventory)
+keyboard_profile.add(button_cards)
+
+
 #КОМАНДА /profile
 @dp.message_handler(commands=['profile'])
 async def profile_command(message: types.Message):
@@ -426,7 +446,7 @@ async def profile_command(message: types.Message):
 
     #ЕСЛИ НЕТ ФОТО, ТО ПРОСТО ОТПРАВЛЯЕМ ПОДПИСЬ
     if photos.total_count == 0:
-        await message.answer(caption, parse_mode="HTML")
+        await message.answer(caption, reply_markup=keyboard_profile, parse_mode="HTML")
         return
     
     #ЕСЛИ ЕСТЬ ФОТО, ТО ПОЛУЧАЕМ FILE_ID САМОГО ПЕРВОГО ФОТО
@@ -436,8 +456,68 @@ async def profile_command(message: types.Message):
     await message.answer_photo(
         photo=file_id,
         caption=caption,
+        reply_markup=keyboard_profile,
         parse_mode="HTML"
     )
+
+#ИНВЕНТАРЬ
+@dp.callback_query_handler(lambda c: c.data == 'inventory')
+async def inventory_callback(callback_query: types.CallbackQuery):
+    #ТУТ НИЧЕГО НЕТУ ПОКА ЧТО
+    await callback_query.message.delete()
+
+    await bot.send_message(
+        chat_id=callback_query.from_user.id,
+        text="🎒Инвентарь\n<blockquote>Ваш инвентарь пуст</blockquote>",
+        reply_markup=keyboard_back_inventory,
+        parse_mode="HTML"
+    )
+    await callback_query.answer()
+
+#ВОЗВРАТ ИЗ ИНВЕНТАРЯ
+@dp.callback_query_handler(lambda c: c.data == 'back_inventory')
+async def back_inventory_callback(callback_query: types.CallbackQuery):
+    user = callback_query.from_user
+    user_visual_id = await get_user_visual_id(user.id) # ПОЛУЧЕНИЕ ВИЗУАЛЬНОГО ID ЮЗЕРА
+    photos = await bot.get_user_profile_photos(user.id) # ПОЛУЧЕНИЕ ФОТО ПРОФИЛЯ ЧЕЛОВЕКА
+
+    points, coins = await get_user_balance(user.id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM user_cards WHERE user_id = ?", (user.id,)) as cursor:
+            row = await cursor.fetchone()
+            cards_count = row[0] if row else 0
+
+    #ПОДПИСЬ К ПРОФИЛЮ
+    caption = (
+        f"👤 Профиль : <b>{user.first_name}</b>\n\n"
+        f"🔎 ID: {user_visual_id}\n"
+        f"💰 Монеты: <b>{coins}</b>\n"
+        f"⭐ Очки: <b>{points}</b>\n"
+        f"🃏 Коллекция: <b>{cards_count}</b> карточек\n"
+    )  
+
+    #ЕСЛИ НЕТ ФОТО, ТО ПРОСТО ОТПРАВЛЯЕМ ПОДПИСЬ
+    if photos.total_count == 0:
+        await callback_query.message.edit_text(caption, reply_markup=keyboard_profile, parse_mode="HTML")
+        await callback_query.answer()
+        return
+    
+    #ЕСЛИ ЕСТЬ ФОТО, ТО ПОЛУЧАЕМ FILE_ID САМОГО ПЕРВОГО ФОТО
+    file_id = photos.photos[0][-1].file_id
+
+    #СКИДЫВАЕМ ФОТО ПРОФИЛЯ С ПОДПИСЬЮ
+    await callback_query.message.delete()
+    await bot.send_photo(
+        chat_id=callback_query.from_user.id,
+        photo=file_id,
+        caption=caption,
+        reply_markup=keyboard_profile,
+        parse_mode="HTML"
+    )
+    await callback_query.answer()
+
+
 
 
 
