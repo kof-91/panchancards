@@ -7,14 +7,17 @@
 import asyncio
 import aiosqlite
 import random
-from aiogram import Bot, Dispatcher, executor, types
 import logging
 import os
 import json
+import datetime
+import re
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.dispatcher.filters import Regexp
 
 #КОНФИГ
-TOKEN = "8306114663:AAFvcz3mhU__2vLu6eASshzXJx70fIpiZQY"
-DB_PATH = "database.db"
+TOKEN = "ТОКЕН СЮДА ЗАПИШИТЕ"
+DB_PATH = "Z:/PANCHAN/database.db" #Я ТУТ ПУТЬ Я ДЛЯ СЕБЯ СДЕЛАЛ ЕСЛИ ЗАПУСКАТЬ БУДЕТЕ ПОМЕНЯЙТЕ НА СВОЙ
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,7 +40,10 @@ async def init_db():
             id INTEGER PRIMARY KEY,
             visual_id TEXT UNIQUE, 
             username TEXT,
-            first_name TEXT
+            first_name TEXT,
+            last_name TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_panchan_at TEXT
         )
         """)
         await db.commit()
@@ -152,11 +158,18 @@ async def get_user_balance(user_id: int) -> tuple[int, int]:
 #СОХРАНЕНИЕ ПОЛУЧЕННОЙ КАРТОЧКИ ЮЗЕРОМ
 async def add_user_card(user_id: int, filename: str, metadata: dict, rarity: str):
     async with aiosqlite.connect(DB_PATH) as db:
+        # Проверяем, есть ли уже такая карточка у пользователя
+        async with db.execute("SELECT 1 FROM user_cards WHERE user_id = ? AND filename = ? LIMIT 1", (user_id, filename)) as cursor:
+            row = await cursor.fetchone()
+        if row:
+            return False
+
         await db.execute(
             "INSERT INTO user_cards (user_id, filename, panchan_id, rarity, points, coins, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
             (user_id, filename, metadata.get('id'), rarity, metadata.get('points', 0), metadata.get('coins', 0))
         )
         await db.commit()
+        return True
 
 
 #НАЧИСЛЕНИЕ БАЛАНСА ЮЗЕРУ
@@ -232,59 +245,78 @@ async def get_unowned_files_by_rarity(user_id: int, rarity: str) -> list:
     return unowned
 
 
+
+#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
+#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
+#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
+#ОЧЕНЬ ВАЖНАЯ ЗАЛУПА!!!!!!!!!
+
+#ПОЛУЧЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО ПАНЧАНА
+async def get_last_panchan_time(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT last_panchan_at FROM users WHERE id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+
+        if row is None or row[0] is None:
+            return None
+
+        try:
+            return datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+        except:
+            return None
+
+#ТУТ ТОЖЕ САМОЕ!!!!!
+#ТУТ ТОЖЕ САМОЕ!!!!!
+#ТУТ ТОЖЕ САМОЕ!!!!!
+#ТУТ ТОЖЕ САМОЕ!!!!!
+#ТУТ ТОЖЕ САМОЕ!!!!!
+
+#ОБНОВЛЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО ПАНЧАНА
+async def update_last_panchan_time(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        await db.execute("UPDATE users SET last_panchan_at = ? WHERE id = ?", (now, user_id))
+        await db.commit()
+
+
 async def choose_card_for_user(user_id: int):
     # ОБЩИЙ СПИСОК ВСЕХ РЕДКОСТЕЙ
     rarities = list(RARITY_POOL.keys())
 
-    #СТАНДАРТНЫЙ ВЫБОР ПО ВЕСАМ
+    #выбор редкости
     chosen_rarity = choose_rarity()
+    rarity_path = os.path.join(PANCHAN_PATH, chosen_rarity)
 
-    #ПЫТАЕМСЯ НАЙТИ НОВУЮ КАРТОЧКУ В ВЫБРАННОЙ РЕДКОСТИ
-    unowned = await get_unowned_files_by_rarity(user_id, chosen_rarity)
-    if unowned:
-        jpg = random.choice(unowned)
-        jpg_path = os.path.join(PANCHAN_PATH, chosen_rarity, jpg)
-        json_path = os.path.splitext(jpg_path)[0] + '.json'
-        return jpg_path, json_path, chosen_rarity, False, jpg
+    #получаем все карточки в этой редкости
+    jpg_candidates = []
+    if os.path.isdir(rarity_path):
+        jpg_candidates = [f for f in os.listdir(rarity_path) if f.endswith('.jpg')]
 
-    #ЕСЛИ В ВЫБРАННОЙ РЕДКОСТИ НЕТ НОВЫХ - ПРОБУЕМ ДРУГИЕ РЕДКОСТИ
-    other = [r for r in rarities if r != chosen_rarity]
-    random.shuffle(other)
-    for r in other:
-        unowned = await get_unowned_files_by_rarity(user_id, r)
-        if unowned:
-            jpg = random.choice(unowned)
-            jpg_path = os.path.join(PANCHAN_PATH, r, jpg)
-            json_path = os.path.splitext(jpg_path)[0] + '.json'
-            return jpg_path, json_path, r, False, jpg
-
-    #НИ ОДНОЙ НОВОЙ КАРТОЧКИ НЕТ - ПОЛНАЯ КОЛЛЕКЦИЯ
-    #ЛЮБУЮ КАРТОЧКУ ДЛЯ НАЧИСЛЕНИЯ ОЧКОВ/МОНЕТ
-    #СТАНДАРТНЫЙ ВЫБОР ПО ВЕСАМ
-    rar = choose_rarity()
-    rarity_path = os.path.join(PANCHAN_PATH, rar)
-    if not os.path.isdir(rarity_path):
-        return None
-
-    jpg_candidates = [f for f in os.listdir(rarity_path) if f.endswith('.jpg')]
+    #если в выбранной редкости нет карточек, ищем в других редкостях
     if not jpg_candidates:
-        #ПРОБУЕМ ДРУГИЕ РЕДКОСТИ
-        for r in rarities:
+        other = rarities[:]
+        random.shuffle(other)
+        for r in other:
             rp = os.path.join(PANCHAN_PATH, r)
             if os.path.isdir(rp):
                 jpg_candidates = [f for f in os.listdir(rp) if f.endswith('.jpg')]
                 if jpg_candidates:
-                    rar = r
+                    chosen_rarity = r
                     rarity_path = rp
                     break
 
     if not jpg_candidates:
         return None
 
+    #случайный выбор карточки
     jpg = random.choice(jpg_candidates)
     jpg_path = os.path.join(rarity_path, jpg)
     json_path = os.path.splitext(jpg_path)[0] + '.json'
-    return jpg_path, json_path, rar, True, jpg
+
+    #прверка
+    already_owned = await user_has_file(user_id, jpg)
+
+    return jpg_path, json_path, chosen_rarity, already_owned, jpg
 
 
 
@@ -410,42 +442,68 @@ async def profile_command(message: types.Message):
 
 
 
+
 #ОБРАБОТЧИК КОМАНД ДЛЯ ПОЛУЧЕНИЯ КАРТОЧКИ
-@dp.message_handler(lambda msg: isinstance(msg.text, str) and msg.text.strip().lower() in ['панчан', 'качан', 'карту', 'получить карту', 'пачан'])
+@dp.message_handler(Regexp(r'^(панчан|качан|карту|получить карту|пачан)$'))
 async def send_panchan(message: types.Message):
-    await add_user(user_id=message.from_user.id, username=message.from_user.username, first_name=message.from_user.first_name)
+    user_id = message.from_user.id
 
-    user = message.from_user
-    points, coins = await get_user_balance(user.id)
+    # таймер
+    last_time = await get_last_panchan_time(user_id)
+    now = datetime.datetime.utcnow()
 
-    choice = await choose_card_for_user(message.from_user.id)
+    if last_time is not None:
+        diff = now - last_time
+        cooldown = 60 * 60 * 4 #4 часа
+        if diff.total_seconds() < cooldown:
+            wait = int(cooldown - diff.total_seconds())
+            wait_hours = wait // 3600
+            wait_minutes = (wait % 3600) // 60
+            wait_seconds = wait % 60
+            return await message.reply(
+                f"Вы осмотрелись, но не увидели рядом <b>Панчан</b> 👀\n\n"
+                f"🕛 Попробуйте через <b>{wait_hours}ч. {wait_minutes}мин. {wait_seconds}сек.</b>",
+                parse_mode="HTML"
+            )
+
+    #регистрация пользователя
+    await add_user(
+        user_id=user_id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name
+    )
+
+    points, coins = await get_user_balance(user_id)
+
+    #выбор карточки
+    choice = await choose_card_for_user(user_id)
     if choice is None:
-        await message.answer("❌ ОШИБКА: Не удалось найти карточку.")
-        return
+        return await message.answer("❌ ОШИБКА: Не удалось найти карточку.")
 
-    jpg_path, json_path, chosen_rarity, full_collection, filename = choice
+    jpg_path, json_path, chosen_rarity, already_owned, filename = choice
 
-    #ЧИТАЕМ JSON
+    #джисон метадата
     with open(json_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)
 
-    if not metadata.get('rarity'):
-        metadata['rarity'] = chosen_rarity or os.path.basename(os.path.dirname(jpg_path))
+    if not metadata.get("rarity"):
+        metadata["rarity"] = chosen_rarity or os.path.basename(os.path.dirname(jpg_path))
 
-    #ПОДГОТОВКА ПОДПИСИ
+    #очко
     try:
-        pts_add = int(metadata.get('points', 0))
-    except (ValueError, TypeError):
+        pts_add = int(metadata.get("points", 0))
+    except:
         pts_add = 0
     try:
-        cns_add = int(metadata.get('coins', 0))
-    except (ValueError, TypeError):
+        cns_add = int(metadata.get("coins", 0))
+    except:
         cns_add = 0
 
     new_points = points + pts_add
     new_coins = coins + cns_add
 
-    caption = (
+    #подпись
+    base_caption = (
         f"🎴 Новая карточка — <b>{metadata.get('title', 'Без названия')}</b>\n\n"
         f"{metadata.get('description', '')}\n\n"
         f"⭐ Редкость: <b>{metadata.get('rarity')}</b>\n"
@@ -453,27 +511,37 @@ async def send_panchan(message: types.Message):
         f"💰 Монеты: +<b>{cns_add} [{new_coins}]</b>"
     )
 
-    #ЕСЛИ КОЛЕКЦИЯ ПОЛНА
-    if full_collection:
-        pts = int(metadata.get('points', 0))
-        cns = int(metadata.get('coins', 0))
-        await increment_user_balance(message.from_user.id, points=pts, coins=cns)
-        await message.answer(f"🎉 У вас полная коллекция — при выпадении карточки <b>{metadata.get('title')}</b> вы получили:\n🏆Очки: {pts} [{points}]\n💰Монеты: {cns} [{coins}]", parse_mode="HTML")
-        return
+    if already_owned:
+        caption = (
+            f"🌟 Карточка — <b>{metadata.get('title')}</b> уже была у вас\n\n"
+            f"⭐ Редкость: <b>{metadata.get('rarity')}</b>\n"
+            f"🏆 Очки: +<b>{pts_add} [{new_points}]</b>\n"
+            f"💰 Монеты: +<b>{cns_add} [{new_coins}]</b>\n\n"
+            f"<blockquote>Будут начислены только очки</blockquote>"
+        )
+    else:
+        caption = base_caption
 
+    #отправка карты
     try:
         with open(jpg_path, "rb") as photo:
             await message.answer_photo(photo, caption=caption, parse_mode="HTML")
 
-        #СОХРАНЕНИЕ КАРТОЧКИ И НАЧИСЛЕНИЕ БАЛАНСА
-        await add_user_card(message.from_user.id, filename, metadata, metadata.get('rarity'))
-        await increment_user_balance(message.from_user.id, points=int(metadata.get('points', 0)), coins=int(metadata.get('coins', 0)))
+        if not already_owned:
+            await add_user_card(user_id, filename, metadata, metadata.get("rarity"))
 
-        new_points, new_coins = await get_user_balance(message.from_user.id)
+        await increment_user_balance(
+            user_id,
+            points=int(metadata.get("points", 0)),
+            coins=int(metadata.get("coins", 0))
+        )
+
+        #обновляем last_panchan_at
+        await update_last_panchan_time(user_id)
 
     except Exception:
-        logging.exception("Ошибка при отправке/сохранении карточки")
-        await message.answer("❌ Ошибка при выдаче карточки. Попробуйте позже.")
+        logging.exception("Ошибка при отправке карточки")
+        return await message.answer("❌ Ошибка при выдаче карточки. Попробуйте позже.")
 
 
 
