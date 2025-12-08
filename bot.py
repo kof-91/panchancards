@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Regexp
 
 #КОНФИГ
-TOKEN = "8484717385:AAENK80yEByo5tDCQDgK-uksC7q16268RaE"
+TOKEN = "ТОКЕН"
 DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
@@ -325,6 +325,19 @@ async def choose_card_for_user(user_id: int):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 #СТАРТОВАЯ КОМАНДА
 #КНОПКА ДЛЯ ДОБАВЛЕНИЯ БОТА В ГРУППУ
 button = types.InlineKeyboardButton(
@@ -351,8 +364,9 @@ async def start(message: types.Message):
         )
 
         # СООБЩЕНИЕ ПРИ СТАРТЕ В ЛС
-        await message.answer(
-            f"👋 Привет! Тут ты можешь собирать уникальные карточки и соревноваться с другими игроками"
+        await message.answer_animation(
+            animation="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZ2JxMXc1NmJxaWdibWdnczR3N3duM3piaHo5Y3JtMndheGliYTh5diZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/FoSN2e0NW3wH1jhuOv/giphy.gif",
+            caption =f"👋 Привет! Тут ты можешь собирать уникальные карточки и соревноваться с другими игроками"
             f"\nКак получить карточки?"
             f"\n<blockquote>Отправь команду «панчан»</blockquote>"
             f"\n\nУзнать все функции можно по команде /help",
@@ -435,9 +449,14 @@ async def profile_command(message: types.Message):
             row = await cursor.fetchone()
             cards_count = row[0] if row else 0
 
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT visual_username FROM users WHERE id = ?", (user.id,)) as cursor:
+            row = await cursor.fetchone()
+            visual_username = row[0] if row else user.first_name
+
     #ПОДПИСЬ К ПРОФИЛЮ
     caption = (
-        f"👤 Профиль : <b>{user.first_name}</b>\n\n"
+        f"👤 Профиль : <b>{visual_username}</b>\n\n"
         f"🔎 ID: {user_visual_id}\n"
         f"💰 Монеты: <b>{coins}</b>\n"
         f"⭐ Очки: <b>{points}</b>\n"
@@ -459,65 +478,6 @@ async def profile_command(message: types.Message):
         reply_markup=keyboard_profile,
         parse_mode="HTML"
     )
-
-#ИНВЕНТАРЬ
-@dp.callback_query_handler(lambda c: c.data == 'inventory')
-async def inventory_callback(callback_query: types.CallbackQuery):
-    #ТУТ НИЧЕГО НЕТУ ПОКА ЧТО
-    await callback_query.message.delete()
-
-    await bot.send_message(
-        chat_id=callback_query.from_user.id,
-        text="🎒Инвентарь\n<blockquote>Ваш инвентарь пуст</blockquote>",
-        reply_markup=keyboard_back_inventory,
-        parse_mode="HTML"
-    )
-    await callback_query.answer()
-
-#ВОЗВРАТ ИЗ ИНВЕНТАРЯ
-@dp.callback_query_handler(lambda c: c.data == 'back_inventory')
-async def back_inventory_callback(callback_query: types.CallbackQuery):
-    user = callback_query.from_user
-    user_visual_id = await get_user_visual_id(user.id) # ПОЛУЧЕНИЕ ВИЗУАЛЬНОГО ID ЮЗЕРА
-    photos = await bot.get_user_profile_photos(user.id) # ПОЛУЧЕНИЕ ФОТО ПРОФИЛЯ ЧЕЛОВЕКА
-
-    points, coins = await get_user_balance(user.id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM user_cards WHERE user_id = ?", (user.id,)) as cursor:
-            row = await cursor.fetchone()
-            cards_count = row[0] if row else 0
-
-    #ПОДПИСЬ К ПРОФИЛЮ
-    caption = (
-        f"👤 Профиль : <b>{user.first_name}</b>\n\n"
-        f"🔎 ID: {user_visual_id}\n"
-        f"💰 Монеты: <b>{coins}</b>\n"
-        f"⭐ Очки: <b>{points}</b>\n"
-        f"🃏 Коллекция: <b>{cards_count}</b> карточек\n"
-    )  
-
-    #ЕСЛИ НЕТ ФОТО, ТО ПРОСТО ОТПРАВЛЯЕМ ПОДПИСЬ
-    if photos.total_count == 0:
-        await callback_query.message.edit_text(caption, reply_markup=keyboard_profile, parse_mode="HTML")
-        await callback_query.answer()
-        return
-    
-    #ЕСЛИ ЕСТЬ ФОТО, ТО ПОЛУЧАЕМ FILE_ID САМОГО ПЕРВОГО ФОТО
-    file_id = photos.photos[0][-1].file_id
-
-    #СКИДЫВАЕМ ФОТО ПРОФИЛЯ С ПОДПИСЬЮ
-    await callback_query.message.delete()
-    await bot.send_photo(
-        chat_id=callback_query.from_user.id,
-        photo=file_id,
-        caption=caption,
-        reply_markup=keyboard_profile,
-        parse_mode="HTML"
-    )
-    await callback_query.answer()
-
-
 
 
 
@@ -623,7 +583,30 @@ async def send_panchan(message: types.Message):
         logging.exception("Ошибка при отправке карточки")
         return await message.answer("❌ Ошибка при выдаче карточки. Попробуйте позже.")
 
+@dp.message_handler(commands=['name'])
+async def change_name_command(message: types.Message):
+    user = message.from_user
+    args = message.get_args()
 
+    if not args:
+        return await message.answer("<b>Использование</b>\n<blockquote>Отправьте /name [имя]\nПример: /name SharoPidr_Gandon</blockquote>", parse_mode="HTML")
+    
+    if len(args.strip()) > 30:
+        return await message.answer("❌<b>Ошибка</b>\n<blockquote>Имя не должно превышать 30 символов</blockquote>", parse_mode="HTML")
+
+    new_name = args.strip()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id FROM users WHERE visual_username = ? AND id != ?", (new_name, user.id)) as cursor:
+            row = await cursor.fetchone()
+        
+        if row:
+            return await message.answer(f"❌<b>Ошибка</b>\n<blockquote>Ник <b>Имя «{new_name}»</b> уже кем то занято</blockquote>", parse_mode="HTML")
+        
+        await db.execute("UPDATE users SET visual_username = ? WHERE id = ?", (new_name, user.id))
+        await db.commit()
+
+    await message.answer(f"✅<b>Успешно</b> \n<blockquote>Ваше имя было изменено на <b>«{new_name}»</b></blockquote>", parse_mode="HTML")
 
 
 
