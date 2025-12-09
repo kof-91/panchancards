@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Regexp
 
 #КОНФИГ
-TOKEN = "8484717385:AAENK80yEByo5tDCQDgK-uksC7q16268RaE"
+TOKEN = ""
 DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
