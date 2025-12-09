@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Regexp
 
 #КОНФИГ
-TOKEN = "ТОКЕН"
+TOKEN = "8484717385:AAENK80yEByo5tDCQDgK-uksC7q16268RaE"
 DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
@@ -45,7 +45,9 @@ async def init_db():
             first_name TEXT,
             last_name TEXT,
             created_at TEXT DEFAULT (datetime('now')),
-            last_panchan_at TEXT
+            last_panchan_at TEXT,
+            have_bonus INTEGER DEFAULT 0,
+            last_bonus_at TEXT
         )
         """)
         await db.commit()
@@ -104,7 +106,7 @@ async def add_user(user_id: int, username: str, first_name: str):
 
         #ДОБАВЛЕНИЕ В БД
         await db.execute(
-            "INSERT INTO users (id, username, first_name, visual_id, visual_username) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, first_name, visual_id, visual_username, have_bonus) VALUES (?, ?, ?, ?, ?, 0)",
             (user_id, username, first_name, visual_id, visual_username)
         )
         await db.commit()
@@ -280,6 +282,27 @@ async def update_last_panchan_time(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         await db.execute("UPDATE users SET last_panchan_at = ? WHERE id = ?", (now, user_id))
+        await db.commit()
+
+#ПОЛУЧЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО БОНУСА
+async def get_last_bonus_time(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT last_bonus_at FROM users WHERE id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+
+        if row is None or row[0] is None:
+            return None
+
+        try:
+            return datetime.datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+        except:
+            return None
+        
+#ОБНОВЛЕНИЕ ВРЕМЕНИ ПОСЛЕДНЕГО БОНУСА
+async def update_last_bonus_time(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        await db.execute("UPDATE users SET last_bonus_at = ? WHERE id = ?", (now, user_id))
         await db.commit()
 
 
@@ -609,8 +632,188 @@ async def change_name_command(message: types.Message):
     await message.answer(f"✅<b>Успешно</b> \n<blockquote>Ваше имя было изменено на <b>«{new_name}»</b></blockquote>", parse_mode="HTML")
 
 
+@dp.message_handler(commands=['bonus'])
+async def bonus_command(message: types.Message):
+    user_id = message.from_user.id
+    chat_type = message.chat.type
 
+    last_time = await get_last_bonus_time(user_id)
+    now = datetime.datetime.utcnow()
 
+    if last_time is not None:
+        diff = now - last_time
+        cooldown = 60 * 60 * 12 #12 ЧАСОВ
+        if diff.total_seconds() < cooldown:
+            wait = int(cooldown - diff.total_seconds())
+            wait_hours = wait // 3600
+            wait_minutes = (wait % 3600) // 60
+            wait_seconds = wait % 60
+            return await message.reply(
+                f"<b>Вы не можете сейчас получить бонус</b>\n\n"
+                f"🕛 Попробуйте через <b>{wait_hours}ч. {wait_minutes}мин. {wait_seconds}сек.</b>",
+                parse_mode="HTML"
+            )
+
+    if chat_type != 'private':
+        await message.answer("🎁<b>Использование</b>\n<blockquote>Команда доступна только в ЛС с ботом</blockquote>", parse_mode="HTML")
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT have_bonus FROM users WHERE id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            have_bonus = row[0] if row and row[0] is not None else 0
+
+    if have_bonus == 1:
+        #регистрация пользователя
+        await add_user(
+            user_id=user_id,
+            username=message.from_user.username,
+            first_name=message.from_user.first_name
+        )
+
+        points, coins = await get_user_balance(user_id)
+
+        #выбор карточки
+        choice = await choose_card_for_user(user_id)
+        if choice is None:
+            return await message.answer("❌ ОШИБКА: Не удалось найти карточку.")
+
+        jpg_path, json_path, chosen_rarity, already_owned, filename = choice
+
+        #джисон метадата
+        with open(json_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        if not metadata.get("rarity"):
+            metadata["rarity"] = chosen_rarity or os.path.basename(os.path.dirname(jpg_path))
+
+        #очко
+        try:
+            pts_add = int(metadata.get("points", 0))
+        except:
+            pts_add = 0
+        try:
+            cns_add = int(metadata.get("coins", 0))
+        except:
+            cns_add = 0
+
+        new_points = points + pts_add
+        new_coins = coins + cns_add
+
+        #подпись
+        base_caption = (
+            f"🎁 <b>Бонусная карточка</b> — <b>{metadata.get('title', 'Без названия')}</b>\n\n"
+            f"{metadata.get('description', '')}\n\n"
+            f"⭐ Редкость: <b>{metadata.get('rarity')}</b>\n"
+            f"🏆 Очки: +<b>{pts_add} [{new_points}]</b>\n"
+            f"💰 Монеты: +<b>{cns_add} [{new_coins}]</b>"
+        )
+
+        if already_owned:
+            caption = (
+                f"🌟 Бонусная карточка — <b>{metadata.get('title')}</b> уже была у вас\n\n"
+                f"⭐ Редкость: <b>{metadata.get('rarity')}</b>\n"
+                f"🏆 Очки: +<b>{pts_add} [{new_points}]</b>\n"
+                f"💰 Монеты: +<b>{cns_add} [{new_coins}]</b>\n\n"
+                f"<blockquote>Будут начислены только очки</blockquote>"
+            )
+        else:
+            caption = base_caption
+
+        #отправка карты
+        try:
+            with open(jpg_path, "rb") as photo:
+                await message.answer_photo(photo, caption=caption, parse_mode="HTML")
+
+            if not already_owned:
+                await add_user_card(user_id, filename, metadata, metadata.get("rarity"))
+
+            await increment_user_balance(
+                user_id,
+                points=int(metadata.get("points", 0)),
+                coins=int(metadata.get("coins", 0))
+            )
+
+            #обновляем last_bonus_at
+            await update_last_bonus_time(user_id)
+
+        except Exception:
+            logging.exception("Ошибка при отправке бонусной карточки")
+            return await message.answer("❌ Ошибка при выдаче бонусной карточки. Попробуйте позже.")
+        return
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📺Подписаться", url="https://t.me/gandonioffical"))
+    kb.add(types.InlineKeyboardButton("📺Подписаться", url="https://t.me/pidorasiofficial"))
+    kb.add(types.InlineKeyboardButton("🔗Перейти", url="https://t.me/EBU_MANGU_BOT?start=ref"))
+    kb.add(types.InlineKeyboardButton("✅Проверить", callback_data="verify"))
+
+    await bot.send_message(
+        text=("<b>📒Задания</b>\n"
+              "<blockquote>Выполните все задания чтобы получить бонус</blockquote>\n"),
+        parse_mode="HTML",
+        chat_id=message.chat.id,
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(lambda c: c.data == 'verify')
+async def process_verify_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+
+    channels = {
+        "МЕСТО ДЛЯ РЕКЛАМЫ 1": "gandonioffical", #ЗАМЕНИТЕ НА СВОИ КАНАЛЫ (БОТ ДОЛЖЕН БЫТЬ АДМИНИСТРАТОРОМ В КАНАЛАХ)
+        "МЕСТО ДЛЯ РЕКЛАМЫ 2": "pidorasiofficial" #ЗАМЕНИТЕ НА СВОИ КАНАЛЫ (БОТ ДОЛЖЕН БЫТЬ АДМИНИСТРАТОРОМ В КАНАЛАХ)
+    }
+
+    not_subscribed = []
+    access_errors = []
+
+    for name, channel in channels.items():
+        chat_id = channel if channel.startswith('@') else f"@{channel}"
+        try:
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            if member.status in ['left', 'kicked']:
+                not_subscribed.append(name)
+        except Exception as e:
+            logging.exception(f"Ошибка при проверке канала {channel}: {e}")
+            access_errors.append(name)
+
+    if not_subscribed or access_errors:
+        parts = ["❌ <b>Ошибка проверки заданий</b>"]
+        if not_subscribed:
+            parts.append(f"Вы не подписаны на каналы: {', '.join(not_subscribed)}")
+        if access_errors:
+            parts.append(f"Не удалось проверить: {', '.join(access_errors)}")
+
+        text = "\n".join(parts)
+
+        await bot.answer_callback_query(
+            callback_query.id,
+            text=text,
+            show_alert=True
+        )
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT have_bonus FROM users WHERE id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            have_bonus = row[0] if row else 0
+
+        if have_bonus == 1:
+            await bot.answer_callback_query(
+                callback_query.id,
+                text="ℹ️ У вас уже есть бонусная карточка.",
+                show_alert=True
+            )
+            return
+
+        await db.execute("UPDATE users SET have_bonus = 1 WHERE id = ?", (user_id,))
+        await db.commit()
+
+    await bot.send_message(
+        callback_query.message.chat.id,
+        text="🎁<b>Бонус получен</b>\n<blockquote>Вы можете снова получить свою бонусную карточку</blockquote>",
+        parse_mode="HTML"
+    )
 
 
 
