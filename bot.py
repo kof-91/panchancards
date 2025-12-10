@@ -13,19 +13,27 @@ import json
 import datetime
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher.filters import Regexp
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo   
 
 #КОНФИГ
-TOKEN = ""
+TOKEN = "8484717385:AAENK80yEByo5tDCQDgK-uksC7q16268RaE"
 DB_PATH = "database.db"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
+#ЧАСОВОЙ ПОЯС
+MSK = ZoneInfo("Europe/Moscow")
+
 logging.basicConfig(level=logging.INFO)
 logging.basicConfig(filename='bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 #ЛЮБЫЕ ЛОГИ ЧЕРЕЗ logging.info("ТЕКСТ ЛОГА")
 
 PANCHAN_PATH = "panchans"
+
+#ЗАГРУЗКА СТИКЕРОВ
+with open("stickers.json", "r", encoding="utf-8") as f:
+    STICKERS = json.load(f)
 
 #РЕДКОСТИ ШАНС В %
 RARITY_POOL = {
@@ -817,9 +825,67 @@ async def process_verify_callback(callback_query: types.CallbackQuery):
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+#СТИКЕРЫ ДЛЯ РАССЫЛКИ
+async def scheduler():
+    while True:
+        now = datetime.now(MSK)
+        target_minute = random.randint(0, 23 * 60 + 59)
+        target_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=target_minute)
+
+        if target_time <= now:
+            target_time += timedelta(days=1)
+
+        wait_seconds = (target_time - now).total_seconds()
+        print(f"СТИКЕРЫ ОТПРАВЯТСЯ В {target_time}")
+
+        await asyncio.sleep(wait_seconds)
+        await send_daily_sticker()
+
+
+async def send_daily_sticker():
+    sticker = random.choice(STICKERS)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT id FROM users")
+        rows = await cursor.fetchall()
+    for (user_id,) in rows:
+        try:
+            await bot.send_sticker(user_id, sticker)
+        except:
+            pass
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT chat_id FROM chats")
+        rows = await cursor.fetchall()
+    for (chat_id,) in rows:
+        try:
+            await bot.send_sticker(chat_id, sticker)
+        except:
+            pass
+
+#ТЕСТ
+@dp.message_handler(commands=['rndsticker'])
+async def test_command(message: types.Message):
+    sticker = random.choice(STICKERS)
+    await message.answer_sticker(sticker)
+
+
 #ИНИТ
 async def on_startup(_):
     await init_db()
+    asyncio.create_task(scheduler())
     logging.info("✅УСПЕШНАЯ ИНИЦИАЛИЗАЦИЯ✅")
 
 if __name__ == '__main__':
