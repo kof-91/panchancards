@@ -1,4 +1,5 @@
-# panchancards
+# panchancards-ON HOLD
 карточге
-делал шаропидр
+спецаильно для @Tema_Normalny
+
 @SharoPetr_4
